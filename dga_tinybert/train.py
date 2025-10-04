@@ -1,6 +1,7 @@
 import os
 import json
 import math
+import gzip
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
@@ -16,6 +17,7 @@ from transformers import (
     TrainingArguments,
 )
 from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
+from collections import Counter
 
 
 DEFAULT_MODEL = os.environ.get("TINYBERT_MODEL", "prajjwal1/bert-tiny")
@@ -78,6 +80,36 @@ def stratified_split(ds: Dataset, label_col: str, test_size: float = 0.1, seed: 
     return ds.train_test_split(test_size=test_size, stratify_by_column=label_col, seed=seed)
 
 
+def load_dataset_from_gzip(path: str, max_samples: Optional[int] = None) -> Dataset:
+    # Implements the provided loader: reads JSON.gz lines and builds domain list and numeric labels
+    domains: List[str] = []
+    labels: List[int] = []
+    print("Загрузка данных...")
+    if max_samples is None:
+        print("Загружаем все образцы (max_samples не указан)...")
+    else:
+        print(f"Загружаем до {max_samples:,} образцов...")
+
+    with gzip.open(path, 'rt', encoding='utf-8') as f:
+        for i, line in enumerate(f):
+            if max_samples and i >= max_samples:
+                break
+            try:
+                data = json.loads(line.strip())
+                domain = data['domain']
+                threat = data['threat']
+                domains.append(domain)
+                labels.append(1 if str(threat).lower() == 'dga' else 0)
+            except json.JSONDecodeError:
+                continue
+            if (i + 1) % 100000 == 0:
+                print(f"Загружено {i + 1:,} образцов...")
+
+    print(f"Итого загружено: {len(domains):,} доменов")
+    print(f"Распределение классов: {Counter(labels)}")
+    return Dataset.from_dict({"domain": domains, "labels": labels})
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser()
@@ -98,6 +130,7 @@ def main():
     parser.add_argument("--test_size", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--streaming", action="store_true", help="Use streaming dataset (no random split)")
+    parser.add_argument("--max_samples", type=int, default=None, help="Max samples to load from JSON.gz")
     args = parser.parse_args()
 
     cfg = Config(
@@ -117,7 +150,12 @@ def main():
     )
 
     # Load data
-    ds = read_jsonl(cfg.train_file) if not args.streaming else load_dataset("json", data_files=cfg.train_file, split="train", streaming=True)
+    is_gz = str(cfg.train_file).endswith('.gz')
+    if is_gz:
+        # Use gzip loader (non-streaming)
+        ds = load_dataset_from_gzip(cfg.train_file, args.max_samples)
+    else:
+        ds = read_jsonl(cfg.train_file) if not args.streaming else load_dataset("json", data_files=cfg.train_file, split="train", streaming=True)
 
     # Normalize labels to strings, and map to ids
     def normalize_labels(example):
@@ -129,7 +167,8 @@ def main():
         example[cfg.label_key] = lbl
         return example
 
-    ds = ds.map(normalize_labels, num_proc=cfg.num_proc) if not args.streaming else ds.map(normalize_labels)
+    if not is_gz:
+        ds = ds.map(normalize_labels, num_proc=cfg.num_proc) if not args.streaming else ds.map(normalize_labels)
 
     # Build label maps without scanning entire dataset
     maps = build_label_maps_fixed()
@@ -141,7 +180,8 @@ def main():
         example["labels"] = label2id[example[cfg.label_key]]
         return example
 
-    ds = ds.map(map_label, num_proc=cfg.num_proc) if not args.streaming else ds.map(map_label)
+    if not is_gz:
+        ds = ds.map(map_label, num_proc=cfg.num_proc) if not args.streaming else ds.map(map_label)
 
     # Split train/val if no eval file provided
     if cfg.eval_file is None and not args.streaming:
@@ -152,9 +192,10 @@ def main():
         train_ds = ds.take(9900000000)
         eval_ds = ds.skip(9900000000).take(100000000)
     else:
-        eval_ds = read_jsonl(cfg.eval_file)
-        eval_ds = eval_ds.map(normalize_labels, num_proc=cfg.num_proc)
-        eval_ds = eval_ds.map(map_label, num_proc=cfg.num_proc)
+        eval_ds = read_jsonl(cfg.eval_file) if not str(cfg.eval_file).endswith('.gz') else load_dataset_from_gzip(cfg.eval_file)
+        if not str(cfg.eval_file).endswith('.gz'):
+            eval_ds = eval_ds.map(normalize_labels, num_proc=cfg.num_proc)
+            eval_ds = eval_ds.map(map_label, num_proc=cfg.num_proc)
         train_ds = ds
 
     # Load tokenizer and model
@@ -169,8 +210,8 @@ def main():
     )
 
     # Tokenize
-    tokenized_train = train_ds.map(lambda x: tokenize_function(x, tokenizer, cfg), batched=True, num_proc=cfg.num_proc) if not args.streaming else train_ds.map(lambda x: tokenize_function(x, tokenizer, cfg), batched=True)
-    tokenized_eval = eval_ds.map(lambda x: tokenize_function(x, tokenizer, cfg), batched=True, num_proc=cfg.num_proc) if not args.streaming else eval_ds.map(lambda x: tokenize_function(x, tokenizer, cfg), batched=True)
+    tokenized_train = train_ds.map(lambda x: tokenize_function(x, tokenizer, cfg), batched=True, num_proc=(cfg.num_proc if not is_gz else None)) if not args.streaming else train_ds.map(lambda x: tokenize_function(x, tokenizer, cfg), batched=True)
+    tokenized_eval = eval_ds.map(lambda x: tokenize_function(x, tokenizer, cfg), batched=True, num_proc=(cfg.num_proc if not is_gz else None)) if not args.streaming else eval_ds.map(lambda x: tokenize_function(x, tokenizer, cfg), batched=True)
 
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
 

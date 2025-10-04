@@ -111,6 +111,22 @@ The converter scans `.csv`, `.txt` files and normalizes labels to `benign` or `d
   ```bash
   python dga_tinybert/train.py --train_file data/dga.jsonl --output_dir outputs/tinybert-dga --model_name prajwal1/bert-tiny --batch_size 256 --num_epochs 2 --fp16
   ```
+
+### Обучение напрямую из JSON.gz
+
+Если у вас сжатый JSONL (`.json.gz`) формата `{"domain": ..., "threat": ...}`, используйте встроенный загрузчик:
+
+```bash
+python dga_tinybert/train.py \
+  --train_file data/dga.json.gz \
+  --output_dir outputs/tinybert-dga \
+  --model_name prajwal1/bert-tiny \
+  --batch_size 256 \
+  --num_epochs 2 \
+  --max_samples 5000000   # опционально ограничить число образцов
+```
+
+Примечание: загрузчик `.gz` сразу создаёт колонки `domain` и `labels` (0=benign, 1=dga), поэтому нормализация меток и маппинг в скрипте пропускаются для этого пути.
 - Prefer `--batch_size 512`+ with gradient accumulation if VRAM limited.
 - Use `--num_proc` for dataset mapping and `--bf16/--fp16` for mixed precision.
 - Consider sharded training data and `--save_steps` large (e.g., 50k).
