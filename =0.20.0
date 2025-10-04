@@ -1,0 +1,13 @@
+Defaulting to user installation because normal site-packages is not writeable
+Requirement already satisfied: transformers==4.44.2 in /home/ubuntu/.local/lib/python3.13/site-packages (4.44.2)
+Requirement already satisfied: accelerate==0.34.2 in /home/ubuntu/.local/lib/python3.13/site-packages (0.34.2)
+Requirement already satisfied: datasets==2.21.0 in /home/ubuntu/.local/lib/python3.13/site-packages (2.21.0)
+Requirement already satisfied: evaluate==0.4.3 in /home/ubuntu/.local/lib/python3.13/site-packages (0.4.3)
+Requirement already satisfied: scikit-learn==1.5.2 in /home/ubuntu/.local/lib/python3.13/site-packages (1.5.2)
+Requirement already satisfied: pydantic==2.9.2 in /home/ubuntu/.local/lib/python3.13/site-packages (2.9.2)
+Requirement already satisfied: numpy in /home/ubuntu/.local/lib/python3.13/site-packages (2.3.3)
+Requirement already satisfied: pandas in /home/ubuntu/.local/lib/python3.13/site-packages (2.3.3)
+Requirement already satisfied: tqdm in /home/ubuntu/.local/lib/python3.13/site-packages (4.67.1)
+Requirement already satisfied: rich in /home/ubuntu/.local/lib/python3.13/site-packages (14.1.0)
+Requirement already satisfied: orjson in /home/ubuntu/.local/lib/python3.13/site-packages (3.11.3)
+Requirement already satisfied: uvloop in /home/ubuntu/.local/lib/python3.13/site-packages (0.21.0)

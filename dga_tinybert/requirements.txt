@@ -1,0 +1,13 @@
+transformers==4.44.2
+accelerate==0.34.2
+datasets==2.21.0
+evaluate==0.4.3
+torch>=2.1.0
+scikit-learn==1.5.2
+pydantic==2.9.2
+numpy>=1.26
+pandas>=2.2.2
+tqdm>=4.66
+rich>=13.7
+orjson>=3.10
+uvloop>=0.20.0
