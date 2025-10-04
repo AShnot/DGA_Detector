@@ -59,6 +59,58 @@ python dga_tinybert/predict.py --model_dir outputs/tinybert-dga --input data/sam
 ```
 
 ## Notes for 16M samples
+## ExtraHop Dataset
+
+Download the dataset and convert to JSONL:
+
+```bash
+git clone https://github.com/ExtraHop/DGA-Detection-Training-Dataset.git data/extrahop
+
+# Convert recursively; writes {domain, threat} JSONL
+python dga_tinybert/convert_extrahop.py \
+  --input_dir data/extrahop \
+  --output_jsonl data/dga_extrahop.jsonl \
+  --shuffle
+
+# Train on the converted file
+python dga_tinybert/train.py \
+  --train_file data/dga_extrahop.jsonl \
+  --output_dir outputs/tinybert-dga-extrahop \
+  --model_name prajwal1/bert-tiny \
+  --batch_size 256 \
+  --num_epochs 2 \
+  --fp16
+```
+
+The converter scans `.csv`, `.txt` files and normalizes labels to `benign` or `dga`, validates domain format, removes duplicates, and optionally shuffles.
+## ExtraHop dataset usage
+
+- Clone the dataset repo:
+  ```bash
+  git clone https://github.com/ExtraHop/DGA-Detection-Training-Dataset.git data/extrahop
+  ```
+
+- Convert to our JSONL (`domain`, `threat`) using the converter:
+  ```bash
+  python dga_tinybert/prepare_extrahop.py \
+    --input_root data/extrahop \
+    --output data/dga.jsonl
+  ```
+
+  Options:
+  - `--dedup` to remove duplicates (uses memory).
+  - You can pass explicit files by label:
+    ```bash
+    python dga_tinybert/prepare_extrahop.py \
+      --dga data/extrahop/path/to/dga.csv \
+      --benign data/extrahop/path/to/benign.csv \
+      --output data/dga.jsonl
+    ```
+
+- Train using the produced file:
+  ```bash
+  python dga_tinybert/train.py --train_file data/dga.jsonl --output_dir outputs/tinybert-dga --model_name prajwal1/bert-tiny --batch_size 256 --num_epochs 2 --fp16
+  ```
 - Prefer `--batch_size 512`+ with gradient accumulation if VRAM limited.
 - Use `--num_proc` for dataset mapping and `--bf16/--fp16` for mixed precision.
 - Consider sharded training data and `--save_steps` large (e.g., 50k).
