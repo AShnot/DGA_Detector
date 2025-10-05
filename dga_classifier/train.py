@@ -5,12 +5,14 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import lightgbm as lgb
+from scipy.sparse import hstack as sparse_hstack, csr_matrix
 from sklearn.metrics import roc_auc_score, log_loss
 from joblib import dump
 
 from .data import stream_data
 from .features import extract_features, get_feature_names
 from .utils import get_logger, get_memory_usage_mb, timer, seed_everything, available_cpu_count
+from .ngram import create_vectorizer, fit_vectorizer_on_subset, transform_domains
 
 
 DEFAULT_PARAMS = {
@@ -44,6 +46,7 @@ def train_incremental(
     seed: int = 42,
     n_jobs_features: int = 1,
     num_threads_lgbm: Optional[int] = None,
+    tfidf_subset_size: int = 200_000,
 ) -> str:
     """
     Инкрементальное обучение LightGBM по чанкам.
@@ -59,8 +62,9 @@ def train_incremental(
         num_threads_lgbm if num_threads_lgbm is not None else max(1, min(8, available_cpu_count()))
     )
 
-    feature_names = get_feature_names()
+    feature_names = get_feature_names()  # tabular feature names (for reference)
     booster = None
+    vectorizer = None
 
     total_seen = 0
     chunk_index = 0
@@ -73,10 +77,32 @@ def train_incremental(
                 f"Chunk {chunk_index}: loaded {len(domains):,} rows | mem {start_mem:.1f} MB"
             )
 
-            with timer(f"Feature extraction (chunk {chunk_index})", logger):
+            # Tabular features
+            with timer(f"Tabular feature extraction (chunk {chunk_index})", logger):
                 X_df = extract_features(domains, n_jobs=n_jobs_features)
-                X = X_df.values.astype(np.float32)
+                X_tab = X_df.values.astype(np.float32)
                 y = np.asarray(labels, dtype=np.int8)
+
+            # TF-IDF features (build vocabulary on the first chunk subset, then freeze)
+            with timer(f"TF-IDF features (chunk {chunk_index})", logger):
+                if vectorizer is None:
+                    vectorizer = create_vectorizer()
+                    fit_size = min(len(domains), tfidf_subset_size)
+                    if fit_size == 0:
+                        continue
+                    fit_vectorizer_on_subset(vectorizer, domains[:fit_size])
+                    logger.info(
+                        f"TF-IDF vocabulary size: {len(vectorizer.vocabulary_):,}; ngram_range={vectorizer.ngram_range}"
+                    )
+                X_tfidf = transform_domains(vectorizer, domains)  # csr_matrix
+
+            # Combine sparse TF-IDF with dense tabular features
+            with timer(f"Combine features (chunk {chunk_index})", logger):
+                X_tab_csr = csr_matrix(X_tab)
+                X = sparse_hstack([X_tfidf, X_tab_csr], format="csr")
+                logger.info(
+                    f"Combined feature matrix shape: {X.shape[0]:,} x {X.shape[1]:,}"
+                )
 
             # Validation split
             rng = np.random.RandomState(seed + chunk_index)
@@ -92,10 +118,10 @@ def train_incremental(
             X_val, y_val = X[val_idx], y[val_idx]
 
             lgb_train = lgb.Dataset(
-                X_train, label=y_train, feature_name=feature_names, free_raw_data=True
+                X_train, label=y_train, free_raw_data=True
             )
             lgb_val = lgb.Dataset(
-                X_val, label=y_val, reference=lgb_train, feature_name=feature_names, free_raw_data=True
+                X_val, label=y_val, reference=lgb_train, free_raw_data=True
             )
 
             with timer(f"LightGBM training (chunk {chunk_index})", logger):
@@ -127,9 +153,13 @@ def train_incremental(
     _ensure_dir(model_out)
     model_payload = {
         "model_str": booster.model_to_string(num_iteration=booster.best_iteration),
-        "feature_names": feature_names,
         "params": params,
         "best_iteration": booster.best_iteration,
+        # Persist vectorizer for inference (frozen vocabulary and idf)
+        "tfidf_vectorizer": vectorizer,
+        # For reference/debugging only
+        "tabular_feature_names": feature_names,
+        "tfidf_num_features": len(vectorizer.vocabulary_) if vectorizer is not None else 0,
     }
     dump(model_payload, model_out)
     logger.info(f"Saved model to {model_out} (best_iteration={booster.best_iteration})")

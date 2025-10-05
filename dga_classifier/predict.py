@@ -9,29 +9,29 @@ from .features import extract_features, get_feature_names
 from .utils import get_logger
 
 
-def _load_booster(model_path: str) -> lgb.Booster:
-    payload = load(model_path)
-    model_str = payload["model_str"]
-    booster = lgb.Booster(model_str=model_str)
-    return booster
+def _load_payload(model_path: str):
+    return load(model_path)
 
 
-def _prepare_features_for_inference(domains: List[str], expected_cols: List[str]) -> np.ndarray:
+def _prepare_features_for_inference(domains: List[str], payload) -> np.ndarray:
+    # Tabular features
     df = extract_features(domains, n_jobs=1)
-    # Align columns strictly
-    for col in expected_cols:
-        if col not in df.columns:
-            df[col] = 0.0
-    df = df[expected_cols]
-    return df.values.astype(np.float32)
+    X_tab = df.values.astype(np.float32)
+    # TF-IDF features
+    vectorizer = payload.get("tfidf_vectorizer")
+    if vectorizer is None:
+        raise RuntimeError("Model payload missing tfidf_vectorizer")
+    from scipy.sparse import hstack as sparse_hstack, csr_matrix
+    X_tfidf = vectorizer.transform(domains)
+    X = sparse_hstack([X_tfidf, csr_matrix(X_tab)], format="csr")
+    return X
 
 
 def predict_domain(domain: str, model_path: str = "models/dga_lgbm.joblib") -> float:
     """Возвращает вероятность класса DGA для домена."""
-    payload = load(model_path)
+    payload = _load_payload(model_path)
     booster = lgb.Booster(model_str=payload["model_str"])  # reconstruct booster
-    expected_cols = payload["feature_names"]
-    X = _prepare_features_for_inference([domain], expected_cols)
+    X = _prepare_features_for_inference([domain], payload)
     prob = float(booster.predict(X)[0])
     return prob
 
@@ -48,18 +48,17 @@ if __name__ == "__main__":
     args = parser.parse_args()
     logger = get_logger()
 
-    payload = load(args.model)
+    payload = _load_payload(args.model)
     booster = lgb.Booster(model_str=payload["model_str"])  # reconstruct booster
-    expected_cols = payload["feature_names"]
 
     if args.domain:
-        X = _prepare_features_for_inference([args.domain], expected_cols)
+        X = _prepare_features_for_inference([args.domain], payload)
         prob = float(booster.predict(X)[0])
         print(f"{args.domain}\t{prob:.6f}")
     else:
         with open(args.file, "r", encoding="utf-8") as f:
             batch = [line.strip() for line in f if line.strip()]
-        X = _prepare_features_for_inference(batch, expected_cols)
+        X = _prepare_features_for_inference(batch, payload)
         probs = booster.predict(X)
         for dom, p in zip(batch, probs):
             print(f"{dom}\t{float(p):.6f}")
